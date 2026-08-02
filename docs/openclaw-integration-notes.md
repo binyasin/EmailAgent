@@ -1,18 +1,60 @@
 # OpenClaw integration notes
 
-Originally these facts were gathered secondhand and flagged "verify before relying on." That
-verification pass happened against the real `docs.openclaw.ai` (fetched directly, not from
-training data) — findings below are marked **RESOLVED** (confirmed, code updated to match),
-**PARTIALLY RESOLVED** (confirmed enough to fix the known bug, but a detail remains open), or
-**STILL OPEN** (still needs a real `openclaw` binary/install to confirm). None of this has been
-exercised against a live Gateway or Fleet install — it's still "docs say X," not "we ran X and it
-worked."
+Originally these facts were gathered secondhand and flagged "verify before relying on." Later
+passes verified against the real `docs.openclaw.ai` (fetched directly) and the OpenClaw source
+(`github.com/openclaw/openclaw`, cloned directly). Findings below are marked **RESOLVED**
+(confirmed, code updated to match), **PARTIALLY RESOLVED** (confirmed enough to fix the known bug,
+but a detail remains open), or **STILL OPEN** (needs more confirmation).
 
-## Fleet CLI surface — RESOLVED
+## Live-verified against a real install (2026-08-02)
 
-Confirmed against `docs.openclaw.ai/cli/fleet`. Fleet is explicitly documented as experimental:
-"command names, flags, output shapes, and the container profile can change between releases
-without a deprecation window."
+Everything above was "docs/source say X" until this pass, which installed and ran actual
+`openclaw` binaries (an isolated `--dev` Gateway process, plus a separate isolated `npm install
+openclaw@beta` — neither touched the user's real global install, config, or state). Key results:
+
+- **`fleet` does not exist on the `stable` channel** (the user's installed version,
+  `2026.7.1-2`) — `openclaw fleet` fails with "Unknown command." It exists only on the **`beta`**
+  channel (`2026.7.2-beta.7`), explicitly labeled "(experimental)" in its own `--help` output.
+  **This means the this repo's entire Fleet-based multi-tenant cell architecture depends on a
+  feature that isn't in OpenClaw's stable release.** Anyone deploying this for real needs to run
+  their OpenClaw hosts on the beta channel, with whatever stability/support tradeoffs that implies
+  — this is a product decision worth surfacing, not just an implementation detail.
+- On the beta binary, `fleet create/status/rm --help` output matches this repo's
+  (already-corrected) `fleet_cli.py` flag-for-flag: no `--config-dir` flag exists, `--no-start` /
+  `--json` / `--gateway-token` / `--port` / `--memory` / `--cpus` / `--runtime` / `--env` all
+  present on `create`; `--force`/`--purge-data` on `rm`. Could not test an actual `fleet create`
+  end-to-end — no Docker/Podman available in this environment — so the exact `--json` output keys
+  for host port/gateway token are still unconfirmed.
+- **`/healthz` and `/readyz` are real** — confirmed by running `openclaw --dev gateway run --auth
+  token ...` and curling both: `{"ok":true,"status":"live"}` / `{"ready":true,"failing":[],...}`.
+  `GatewayClient.is_live()`/`is_ready()` were correct all along.
+- **Ran the actual Python `GatewayClient.trigger_run()` against the live Gateway and got a full
+  connect → `agent` → `agent.wait` round trip to complete**, returning a real terminal snapshot
+  (`{"runId": ..., "status": "error", "endedAt": ..., "error": "FailoverError: No API key found
+  for provider \"openai\"..."}` — the "error" is just the throwaway dev profile having no model
+  auth configured; the protocol round trip itself succeeded). This is the strongest evidence yet
+  that the Gateway RPC design in this repo is correct. Three real bugs were found and fixed via
+  this live test, none of which were visible from docs alone:
+  - `client.id` and `client.mode` are **closed enums**, not free-form strings — the Gateway
+    rejected `"emailagent-control-plane"` / `"operator"` with `must be equal to one of the allowed
+    values`. Correct generic values (from the SDK's own `client-info.ts`, read out of the beta
+    package's dist bundle): `client.id: "gateway-client"`, `client.mode: "backend"`.
+  - The `agent` RPC's prompt field is named **`message`, not `prompt`** as the docs-search summary
+    claimed.
+  - **`idempotencyKey` is required** on the `agent` RPC, not optional as the docs-search summary
+    claimed — `gateway_client.py` now generates one (`uuid.uuid4()`) per call.
+  - (Not a bug, just an operational note: the agent id used in a real `agent` RPC call must match
+    a configured agent, e.g. `openclaw agents list` — a fresh dev profile only has one, named
+    `dev`.)
+- `stream_session_events` (`sessions.messages.subscribe`) was **not** exercised live this pass —
+  still only verified against the in-process fake server, not a real Gateway.
+
+## Fleet CLI surface — RESOLVED (and beta-channel-only, confirmed live)
+
+Confirmed against `docs.openclaw.ai/cli/fleet` and, since this pass, a real beta-channel install
+(see "Live-verified" above — **`fleet` is not in the `stable` channel at all**). Fleet is
+explicitly documented, and confirmed live, as experimental: "command names, flags, output shapes,
+and the container profile can change between releases without a deprecation window."
 
 Subcommands: `create <tenant>`, `list`/`ls`, `status <tenant>`, `logs <tenant>` (`--follow`,
 `--tail`, `--since`), `start`/`stop`/`restart <tenant>`, `upgrade <tenant>`, `backup <tenant>
@@ -38,10 +80,10 @@ necessary, but it's the safe choice given that's still not 100% confirmed).
 
 **Still open**: the exact JSON keys `fleet create --json`/`fleet status --json` return for host
 port and gateway token (`CellCreateResult` guesses `host_port`/`port` and `gateway_token`/`token`
-— plausible given the flag names `--port`/`--gateway-token`, but not confirmed from an actual
-example payload). `list`, `logs`, `backup`, `restore`, `doctor`, `upgrade` aren't wired into
-`CellProvisioner` yet — not needed for Phase 3 provisioning, but worth adding once an admin
-cells-ops UI needs them.
+— plausible given the flag names `--port`/`--gateway-token`, confirmed live via `--help`, but no
+Docker/Podman was available in this pass to actually run `fleet create` and see a real payload).
+`list`, `logs`, `backup`, `restore`, `doctor`, `upgrade` aren't wired into `CellProvisioner` yet —
+not needed for Phase 3 provisioning, but worth adding once an admin cells-ops UI needs them.
 
 ## Gateway WebSocket RPC protocol (v4) — RESOLVED, blocker was wrong
 
@@ -57,9 +99,13 @@ Pre-auth frames capped at 64 KiB; post-auth cap comes from `hello-ok.policy.maxP
 MB); server sends `tick` keepalives at `policy.tickIntervalMs`, and silence beyond 2x that triggers
 a client-side close (code 4000).
 
-RPC method shapes now known: `agent` (params: `prompt` required, `agentId`/`model`/`deliver`/
-`bestEffortDeliver`/`idempotencyKey` optional) paired with `agent.wait` (params: `runId`) — the
-pairing `/gateway/external-apps` explicitly recommends for external integrations. Session-scoped
+RPC method shapes: `agent` (params, **live-confirmed** by running it against a real Gateway —
+see "Live-verified" above: `message` required — not `prompt` as the docs-search summary said —
+and `idempotencyKey` required, contradicting the docs-search summary's "optional." `agentId` was
+always sent in this pass's test calls, so whether it's truly required or just validated-when-
+present wasn't isolated; `model`/`deliver`/`bestEffortDeliver` untested, still per the original
+docs-search summary) paired with `agent.wait` (params: `runId`) — the pairing
+`/gateway/external-apps` explicitly recommends for external integrations. Session-scoped
 alternative: `sessions.create` (params: `model`/`thinkingLevel`/`worktree`/`parentSessionKey`/...,
 returns `sessionKey`) → `sessions.send` (params: `key`, `message`, `queueMode`, ...). Streaming:
 `sessions.messages.subscribe` (params: `sessionKey`, `includeApprovals`); broadcast event families
@@ -90,14 +136,15 @@ sha256 hex digest of the raw 32-byte public key. See
 `src/infra/{device-identity,ed25519-signature}.ts` if the paired-device flow is ever needed for a
 different feature.)
 
-**Still open**: the protocol docs do **not** describe HTTP `/healthz`/`/readyz` endpoints — they
-describe a WS-only `health` RPC method instead. `GatewayClient.is_live()`/`is_ready()` still probe
-HTTP `/healthz`/`/readyz` as a best-effort fallback (plausible as a container-level liveness probe
-separate from the client protocol), but that's flagged as unverified rather than "corroborated" as
-the original docstring claimed. Confirm against a real cell before depending on it for anything but
-local dev convenience. Also still open: whether `role: "operator"` with only a shared token gets
-the scopes needed to call `agent`/`agent.wait` (vs. requiring `operator.admin`, which the cron RPC
-family needs) — not confirmed from source in this pass.
+**Resolved live**: despite the WS protocol docs only describing a `health` RPC method, `/healthz`
+and `/readyz` are real HTTP routes — confirmed by running a real Gateway and curling both (see
+"Live-verified" above). `GatewayClient.is_live()`/`is_ready()` are correct.
+
+**Also resolved live, provisionally**: `role: "operator"` with only a shared token (no device) was
+sufficient to successfully call `agent` and `agent.wait` against a real (dev-profile, default
+`--auth token`) Gateway — no `operator.admin` or extra scope was needed for this pairing. That's
+one data point on one dev config, though, not a guarantee across every `gateway.auth` mode; worth
+re-confirming against a production-shaped Gateway config before relying on it fully.
 
 ## `mcp`/`agents` config schema — RESOLVED, one real bug fixed
 
@@ -209,27 +256,32 @@ default — no code changes needed, nothing here was being relied on incorrectly
   new cells (Fleet must create the directory before we can overwrite it); config updates on an
   existing cell now `restart()` instead of re-`start()`.
 - `control-plane/app/services/gateway_client.py`: implemented `trigger_run`/`stream_session_events`
-  as a real token-auth WebSocket client (`role: "operator"`, `auth.token`, no device object) per
-  the resolved finding above; HTTP health-probe assumption downgraded from "corroborated" to
-  "unverified fallback."
+  as a real token-auth WebSocket client (`role: "operator"`, `auth.token`, no device object),
+  then corrected against a live Gateway: `client.id`/`client.mode` are closed enums
+  (`"gateway-client"`/`"backend"`), the `agent` RPC field is `message` not `prompt`, and
+  `idempotencyKey` is required.
 - `agent-runtime/templates/dev-cron-jobs.json5`: corrected the "injected as if a channel message"
   framing and the flag syntax (positional cron-expr/message, `--session`, `--agent`); documented
   the real `openclaw cron add` equivalent command.
 
 ## Still not exercised against a real install
 
-Everything above is now grounded in the real `docs.openclaw.ai` and, for the Gateway protocol, the
-OpenClaw source itself — but none of it has been run against an actual `openclaw` binary or a live
-Gateway/Fleet cell. Before trusting this beyond local dev, in priority order:
+The Gateway RPC connect→`agent`→`agent.wait` path is now live-verified (see "Live-verified"
+above), and `/healthz`/`/readyz` and the Fleet CLI flag surface are confirmed too. What's left, in
+priority order:
 
-1. Connect the new `GatewayClient` WS implementation to a real Gateway and confirm `role:
-   "operator"` + shared token actually gets the scopes needed to call `agent`/`agent.wait` (the
-   source didn't make default operator scopes fully clear — see the "still open" note above).
-2. Run `openclaw fleet create --help` (and the real command) to confirm the `--json` output shape
-   for host port/gateway token, and confirm `<state-dir>/fleet/cells/<tenant>/` is really where a
-   config write lands.
-3. Stand up a real cell and hit its `/healthz` to see if it actually exists, or if `health` is
-   WS-RPC-only as the protocol docs suggest.
+1. **A real `fleet create`** — no Docker/Podman was available in this pass, so the actual cell
+   lifecycle (create → config write → start) and the `--json` output shape for host port/gateway
+   token are still unconfirmed beyond `--help` text. This needs a host with a container runtime.
+2. **`stream_session_events`** (`sessions.messages.subscribe`) — implemented and unit-tested
+   against the fake server, but not yet run against a real Gateway the way `trigger_run` was.
+3. **A real `openclaw cron add`** invocation, to confirm the agent actually receives and acts on a
+   scheduler-run turn as expected, and to see whether it's really CLI-only or has a companion
+   `cron.*` RPC path worth using instead (see the cron section above).
+4. Whether `role: "operator"` + shared token holds up against a Gateway with a stricter
+   `gateway.auth`/scopes configuration than the default dev profile used in this pass.
+5. Helm chart (`helm lint`/`helm template`) and Stripe billing against a real test-mode account —
+   untouched by this or the previous verification passes.
 4. Test one `openclaw cron add "<cron>" "<message>" --session isolated --agent ... --no-deliver`
    invocation end-to-end to confirm the agent actually receives and acts on it as a "scheduler
    turn," and to reveal the on-disk `jobs.json` schema if there is one.

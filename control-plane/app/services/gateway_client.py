@@ -45,7 +45,11 @@ import httpx
 import websockets
 
 GATEWAY_PROTOCOL_VERSION = 4
-_CLIENT_ID = "emailagent-control-plane"
+# client.id/client.mode are closed enums server-side, not free-form strings —
+# confirmed by connecting to a real Gateway (see docs/openclaw-integration-notes.md).
+# "gateway-client"/"backend" are the generic values for a headless service integration.
+_CLIENT_ID = "gateway-client"
+_CLIENT_MODE = "backend"
 _CLIENT_VERSION = "0.1.0"
 
 
@@ -105,7 +109,7 @@ class GatewayClient:
                     "id": _CLIENT_ID,
                     "version": _CLIENT_VERSION,
                     "platform": "server",
-                    "mode": "operator",
+                    "mode": _CLIENT_MODE,
                 },
                 "role": "operator",
                 "scopes": ["operator.read", "operator.write"],
@@ -160,7 +164,11 @@ class GatewayClient:
         `agent` + `agent.wait` pairing (docs.openclaw.ai/gateway/external-apps)."""
         ws = await self._connect()
         try:
-            started = await self._request(ws, "agent", {"agentId": agent_id, "prompt": prompt})
+            started = await self._request(
+                ws,
+                "agent",
+                {"agentId": agent_id, "message": prompt, "idempotencyKey": str(uuid.uuid4())},
+            )
             run_id = started.get("runId") if isinstance(started, dict) else None
             if not run_id:
                 raise GatewayProtocolError(f"agent RPC response missing runId: {started!r}")

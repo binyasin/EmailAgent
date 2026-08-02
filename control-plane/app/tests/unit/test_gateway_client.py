@@ -57,7 +57,10 @@ async def test_trigger_run_completes_agent_and_agent_wait_round_trip():
         seen_params.update(await _handshake(ws))
         agent_req = await _recv_json(ws)
         assert agent_req["method"] == "agent"
-        assert agent_req["params"] == {"agentId": "org-1-primary", "prompt": "do the thing"}
+        params = agent_req["params"]
+        assert params["agentId"] == "org-1-primary"
+        assert params["message"] == "do the thing"
+        assert isinstance(params["idempotencyKey"], str) and params["idempotencyKey"]
         await _send_json(
             ws, {"type": "res", "id": agent_req["id"], "ok": True, "payload": {"runId": "run-1"}}
         )
