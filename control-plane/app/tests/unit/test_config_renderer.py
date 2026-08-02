@@ -28,7 +28,7 @@ def test_render_openclaw_config_includes_only_connected_providers():
     assert "outlook:" not in rendered
 
     parsed = json5.loads(rendered)
-    assert set(parsed["mcpServers"].keys()) == {"gmail"}
+    assert set(parsed["mcp"]["servers"].keys()) == {"gmail"}
     assert parsed["agents"]["entries"]["org-1-primary"]["skills"] == [
         "_shared",
         "triage",
@@ -45,7 +45,7 @@ def test_render_openclaw_config_includes_both_providers_when_both_connected():
     )
 
     parsed = json5.loads(rendered)
-    assert set(parsed["mcpServers"].keys()) == {"gmail", "outlook"}
+    assert set(parsed["mcp"]["servers"].keys()) == {"gmail", "outlook"}
 
 
 def test_render_openclaw_config_rejects_no_providers():
@@ -116,5 +116,5 @@ def test_render_tenant_config_files_end_to_end(db_session):
 
     assert set(files.keys()) == {"openclaw.json", "vip-list.md"}
     parsed = json5.loads(files["openclaw.json"])
-    assert set(parsed["mcpServers"].keys()) == {"gmail"}
+    assert set(parsed["mcp"]["servers"].keys()) == {"gmail"}
     assert "ceo@example.com" in files["vip-list.md"]

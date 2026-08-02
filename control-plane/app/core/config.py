@@ -33,11 +33,14 @@ class Settings(BaseSettings):
 
     cors_allow_origins: list[str] = ["http://localhost:5173"]
 
-    # Phase 3: local staging directory where rendered per-tenant config
-    # (openclaw.json, vip-list.md) is written before being handed to Fleet —
-    # see app/workers/provision_cell.py and the UNVERIFIED note in
-    # app/services/fleet_cli.py about how Fleet actually expects to receive it.
-    cell_state_root: str = "./.cell-state"
+    # Phase 3: host-side OpenClaw state directory that the `openclaw` binary
+    # (invoked by app/services/fleet_cli.py) reads OPENCLAW_STATE_DIR from.
+    # Fleet manages tenant config under `<openclaw_state_dir>/fleet/cells/<tenant>/`
+    # itself (confirmed against docs.openclaw.ai/cli/fleet — see
+    # docs/openclaw-integration-notes.md) — app/workers/provision_cell.py writes
+    # rendered openclaw.json/vip-list.md directly into that directory rather than
+    # passing a config path via a Fleet CLI flag (no such flag exists).
+    openclaw_state_dir: str = "~/.openclaw"
     default_cell_image: str = "openclaw/openclaw:latest"
 
     # billing — see app/services/billing.py

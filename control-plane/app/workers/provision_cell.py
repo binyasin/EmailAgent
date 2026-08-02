@@ -1,6 +1,6 @@
 """Orchestrates provisioning/updating a tenant's OpenClaw Fleet cell:
-render config -> stage it on disk -> create-or-update the cell via Fleet ->
-record the result on the AgentCell row.
+render config -> write it into Fleet's own per-tenant state directory ->
+create-or-update the cell via Fleet -> record the result on the AgentCell row.
 
 Wrapped in a process-wide lock because Fleet's cell state is file-based per
 host (see docs/openclaw-integration-notes.md) — concurrent `fleet` mutations
@@ -28,8 +28,16 @@ from app.services.token_crypto import encrypt_token
 _provision_lock = threading.Lock()
 
 
+def _cell_config_dir(tenant_key: str) -> Path:
+    # Fleet-managed per-tenant directory, mounted into the container at
+    # /home/node/.openclaw — confirmed against docs.openclaw.ai/cli/fleet.
+    # See docs/openclaw-integration-notes.md.
+    openclaw_state_dir = Path(get_settings().openclaw_state_dir).expanduser()
+    return openclaw_state_dir / "fleet" / "cells" / tenant_key
+
+
 def _stage_config_files(tenant_key: str, files: dict[str, str]) -> Path:
-    state_dir = Path(get_settings().cell_state_root) / tenant_key
+    state_dir = _cell_config_dir(tenant_key)
     state_dir.mkdir(parents=True, exist_ok=True)
     for filename, content in files.items():
         (state_dir / filename).write_text(content, encoding="utf-8")
@@ -56,12 +64,16 @@ def provision_cell(
 
     with _provision_lock:
         cell = db.scalar(select(AgentCell).where(AgentCell.org_id == org_id))
-
         config_files = render_tenant_config_files(db, org_id, agent_id=agent_id)
-        tenant_key = cell.tenant_key if cell is not None else org_id
-        state_dir = _stage_config_files(tenant_key, config_files)
 
         if cell is None:
+            # Fleet seeds its own default config into
+            # <state-dir>/fleet/cells/<tenant>/ on create, so the cell must
+            # exist (created with no_start=True) before we overwrite that
+            # directory with our rendered config and only then start it —
+            # see docs/openclaw-integration-notes.md.
+            tenant_key = org_id
+
             # Minted once, at creation — this is the credential the cell's
             # MCP servers use to call the token-broker/ingest endpoints, with
             # org_id baked into the token itself (see core/security.py's
@@ -73,8 +85,9 @@ def provision_cell(
                 tenant_key,
                 image=image_ref,
                 env={"TENANT_ID": org_id, "CELL_SERVICE_TOKEN": cell_service_token},
-                config_dir=str(state_dir),
+                no_start=True,
             )
+            _stage_config_files(create_result.tenant_key, config_files)
             cell = AgentCell(
                 org_id=org_id,
                 tenant_key=create_result.tenant_key,
@@ -90,12 +103,16 @@ def provision_cell(
             )
             db.add(cell)
             db.flush()
+            cell_provisioner.start(cell.tenant_key)
             action = "cell.created"
         else:
+            # The cell's directory already exists from a prior create, so it's
+            # safe to overwrite the config files before restarting.
+            _stage_config_files(cell.tenant_key, config_files)
             cell.config_version += 1
+            cell_provisioner.restart(cell.tenant_key)
             action = "cell.config_updated"
 
-        cell_provisioner.start(cell.tenant_key)
         cell.status = "running"
 
         record_audit_event(

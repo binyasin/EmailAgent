@@ -9,7 +9,7 @@ importable dev library. It is consumed as a dependency (npm/Docker install), con
 - **Skills** — `SKILL.md` files (YAML frontmatter + markdown instructions) that teach the agent
   a capability. Discovered under configured skill roots with a workspace > project > personal >
   managed > bundled > extra-folder precedence.
-- **MCP servers** — external tool integrations wired into `mcpServers` in the config, stdio or
+- **MCP servers** — external tool integrations wired into `mcp.servers` in the config, stdio or
   HTTP transport, with per-agent `toolFilter.include/exclude` allow-lists.
 - **Memory** — a `memory` config block (sqlite-vec backed) that indexes selected sources for
   recall across sessions.

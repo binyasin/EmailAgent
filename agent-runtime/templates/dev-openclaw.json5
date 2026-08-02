@@ -4,68 +4,69 @@
 // actually connected via OAuth at a time (see docs/phase1-runbook.md), but
 // listing both here means either can be used without editing this file.
 //
-// NOTE: field names/shapes below (mcpServers.*, agents.defaults/entries,
+// NOTE: field names/shapes below (mcp.servers.*, agents.defaults/entries,
 // toolFilter, memory.search, and where a per-agent HEARTBEAT.md is expected
-// to live) are based on secondhand documentation summaries gathered during
-// planning, not primary-source reading of docs.openclaw.ai. Verify against
-// `openclaw --help` / docs.openclaw.ai/gateway/configuration-reference
-// before treating this as authoritative — see docs/openclaw-integration-notes.md.
+// to live) are verified against docs.openclaw.ai/gateway/configuration-reference
+// — see docs/openclaw-integration-notes.md for citations and any remaining
+// open questions.
 // The cron config for the digest skill is a separate file, see
 // dev-cron-jobs.json5 in this same directory.
 {
-  mcpServers: {
-    gmail: {
-      command: "node",
-      args: ["/opt/agent-runtime/mcp-servers/gmail-mcp/dist/index.js"],
-      env: {
-        CONTROL_PLANE_INTERNAL_URL: "${CONTROL_PLANE_INTERNAL_URL}",
-        CELL_SERVICE_TOKEN: "${CELL_SERVICE_TOKEN}",
+  mcp: {
+    servers: {
+      gmail: {
+        command: "node",
+        args: ["/opt/agent-runtime/mcp-servers/gmail-mcp/dist/index.js"],
+        env: {
+          CONTROL_PLANE_INTERNAL_URL: "${CONTROL_PLANE_INTERNAL_URL}",
+          CELL_SERVICE_TOKEN: "${CELL_SERVICE_TOKEN}",
+        },
+        toolFilter: {
+          include: [
+            "search_threads",
+            "get_message",
+            "get_thread",
+            "list_drafts",
+            "create_draft",
+            "update_draft",
+            "list_labels",
+            "create_label",
+            "label_message",
+            "label_thread",
+            "apply_sensitive_thread_label",
+            "find_availability",
+            "list_events",
+            "create_event",
+            "notify_digest_ready",
+          ],
+        },
       },
-      toolFilter: {
-        include: [
-          "search_threads",
-          "get_message",
-          "get_thread",
-          "list_drafts",
-          "create_draft",
-          "update_draft",
-          "list_labels",
-          "create_label",
-          "label_message",
-          "label_thread",
-          "apply_sensitive_thread_label",
-          "find_availability",
-          "list_events",
-          "create_event",
-          "notify_digest_ready",
-        ],
-      },
-    },
-    outlook: {
-      command: "node",
-      args: ["/opt/agent-runtime/mcp-servers/outlook-mcp/dist/index.js"],
-      env: {
-        CONTROL_PLANE_INTERNAL_URL: "${CONTROL_PLANE_INTERNAL_URL}",
-        CELL_SERVICE_TOKEN: "${CELL_SERVICE_TOKEN}",
-      },
-      toolFilter: {
-        include: [
-          "search_threads",
-          "get_message",
-          "get_thread",
-          "list_drafts",
-          "create_draft",
-          "update_draft",
-          "list_labels",
-          "create_label",
-          "label_message",
-          "label_thread",
-          "apply_sensitive_thread_label",
-          "find_availability",
-          "list_events",
-          "create_event",
-          "notify_digest_ready",
-        ],
+      outlook: {
+        command: "node",
+        args: ["/opt/agent-runtime/mcp-servers/outlook-mcp/dist/index.js"],
+        env: {
+          CONTROL_PLANE_INTERNAL_URL: "${CONTROL_PLANE_INTERNAL_URL}",
+          CELL_SERVICE_TOKEN: "${CELL_SERVICE_TOKEN}",
+        },
+        toolFilter: {
+          include: [
+            "search_threads",
+            "get_message",
+            "get_thread",
+            "list_drafts",
+            "create_draft",
+            "update_draft",
+            "list_labels",
+            "create_label",
+            "label_message",
+            "label_thread",
+            "apply_sensitive_thread_label",
+            "find_availability",
+            "list_events",
+            "create_event",
+            "notify_digest_ready",
+          ],
+        },
       },
     },
   },
