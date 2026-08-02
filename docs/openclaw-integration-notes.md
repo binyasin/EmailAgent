@@ -43,17 +43,19 @@ example payload). `list`, `logs`, `backup`, `restore`, `doctor`, `upgrade` aren'
 `CellProvisioner` yet — not needed for Phase 3 provisioning, but worth adding once an admin
 cells-ops UI needs them.
 
-## Gateway WebSocket RPC protocol (v4) — PARTIALLY RESOLVED, one hard blocker found
+## Gateway WebSocket RPC protocol (v4) — RESOLVED, blocker was wrong
 
-Confirmed against `docs.openclaw.ai/gateway/protocol`, `/gateway/external-apps`, and
-`/reference/rpc`. Connection: server sends `{type: "event", event: "connect.challenge", payload:
-{nonce, ts}}`, client replies with a `connect` request, server answers `hello-ok`. Protocol v4
-current, v3 supported for one version back. Request/response envelope:
-`{type: "req", id, method, params}` → `{type: "res", id, ok: true, payload}` or `{..., ok: false,
-error: {code, message, details, retryable, retryAfterMs}}`; out-of-band updates arrive as
-`{type: "event", event, payload}`. Pre-auth frames capped at 64 KiB; post-auth cap comes from
-`hello-ok.policy.maxPayload` (default 25 MB); server sends `tick` keepalives at
-`policy.tickIntervalMs`, and silence beyond 2x that triggers a client-side close (code 4000).
+Confirmed against `docs.openclaw.ai/gateway/protocol`, `/gateway/external-apps`, `/reference/rpc`,
+and — because the docs site alone left the signing question unanswered — the OpenClaw source
+itself (`github.com/openclaw/openclaw`, `main` branch, read directly via a shallow clone; not
+guessed). Connection: server sends `{type: "event", event: "connect.challenge", payload: {nonce,
+ts}}`, client replies with a `connect` request, server answers `hello-ok`. Protocol v4 current, v3
+supported for one version back. Request/response envelope: `{type: "req", id, method, params}` →
+`{type: "res", id, ok: true, payload}` or `{..., ok: false, error: {code, message, details,
+retryable, retryAfterMs}}`; out-of-band updates arrive as `{type: "event", event, payload}`.
+Pre-auth frames capped at 64 KiB; post-auth cap comes from `hello-ok.policy.maxPayload` (default 25
+MB); server sends `tick` keepalives at `policy.tickIntervalMs`, and silence beyond 2x that triggers
+a client-side close (code 4000).
 
 RPC method shapes now known: `agent` (params: `prompt` required, `agentId`/`model`/`deliver`/
 `bestEffortDeliver`/`idempotencyKey` optional) paired with `agent.wait` (params: `runId`) — the
@@ -63,25 +65,39 @@ returns `sessionKey`) → `sessions.send` (params: `key`, `message`, `queueMode`
 `sessions.messages.subscribe` (params: `sessionKey`, `includeApprovals`); broadcast event families
 are `chat`, `session.message`, `session.operation`, `session.observer`.
 
-**Hard blocker found this pass, not present in the earlier summary**: `connect.params.auth.token`
-alone is not sufficient. "All connections must sign the server-provided connect.challenge nonce" —
-`connect.params.device` (`id`, `publicKey`, `signature`, `signedAt`, `nonce`) is a **required**
-object for every role (operator/node/worker), not just paired end-user devices. Neither
-`/gateway/external-apps` nor `/reference/rpc` documents a simpler non-interactive path for a
-backend service, and the signing algorithm itself wasn't found anywhere in this pass. This means
-`GatewayClient` can't be a bearer-token WS client — it needs a provisioned device keypair, and how
-that reconciles with this repo's one-`gateway_token`-per-cell model (`AgentCell.gateway_token_encrypted`,
-`services/fleet_cli.py`'s `--gateway-token`) is an open design question, not just an
-implementation detail. `gateway_client.py`'s docstring and `NotImplementedError` messages now spell
-this out; do not guess at the signing algorithm — get it from the OpenClaw source or an official
-SDK before writing real signing code here.
+**The "device signing is mandatory for every connection" blocker from the previous pass was
+wrong** — that was an overread of a docs-search summary, and the source code contradicts it
+directly. Server-side, `verifyGatewayConnectDeviceProof` in
+`src/gateway/server/ws-connection/connect-device-proof.ts` opens with `if (!device) { return {
+ok: true, devicePublicKey: null, ... } }` — an absent `device` object is explicitly accepted, not
+rejected. Client-side, `packages/gateway-client/src/client.ts`'s `buildDeviceConnectParams`
+returns `undefined` whenever no `deviceIdentity` is configured. Device signing is only exercised
+for the **paired end-user device** flow (phone/CLI pairing with persistent identity); it is not
+required for plain shared-secret auth. `src/gateway/auth.ts` treats `"token"` as a first-class,
+independent auth method alongside `"password"`/`"tailscale"`/`"trusted-proxy"`. The top-level
+connect roles are only `"operator"` and `"node"` (`src/gateway/role-policy.ts`) — "worker" in the
+earlier docs-search summary refers to a separate, unrelated low-level protocol for local
+inference-worker processes, not a connect-handshake role.
 
-**Also still open**: the protocol docs do **not** describe HTTP `/healthz`/`/readyz` endpoints —
-they describe a WS-only `health` RPC method instead. `GatewayClient.is_live()`/`is_ready()` still
-probe HTTP `/healthz`/`/readyz` as a best-effort fallback (plausible as a container-level liveness
-probe separate from the client protocol), but that's flagged as unverified rather than
-"corroborated" as the original docstring claimed. Confirm against a real cell before depending on
-it for anything but local dev convenience.
+**Conclusion: `GatewayClient` can be a plain token-auth WS client.** Connect with `role:
+"operator"`, `auth: {token: <gateway_token>}`, and omit `device` entirely — no keypair, no
+signing, no device pairing/approval flow needed. This fully resolves what was reported as a hard
+blocker; `trigger_run`/`stream_session_events` are implementable now. (For completeness, since it
+was tracked down anyway: device signing, when used, is Ed25519 — Node's
+`crypto.generateKeyPairSync("ed25519")`, PEM-encoded PKCS8/SPKI keys, `crypto.sign(null, payload,
+privateKey)` over a pipe-delimited payload string, output base64url-encoded; device id is the
+sha256 hex digest of the raw 32-byte public key. See
+`src/infra/{device-identity,ed25519-signature}.ts` if the paired-device flow is ever needed for a
+different feature.)
+
+**Still open**: the protocol docs do **not** describe HTTP `/healthz`/`/readyz` endpoints — they
+describe a WS-only `health` RPC method instead. `GatewayClient.is_live()`/`is_ready()` still probe
+HTTP `/healthz`/`/readyz` as a best-effort fallback (plausible as a container-level liveness probe
+separate from the client protocol), but that's flagged as unverified rather than "corroborated" as
+the original docstring claimed. Confirm against a real cell before depending on it for anything but
+local dev convenience. Also still open: whether `role: "operator"` with only a shared token gets
+the scopes needed to call `agent`/`agent.wait` (vs. requiring `operator.admin`, which the cron RPC
+family needs) — not confirmed from source in this pass.
 
 ## `mcp`/`agents` config schema — RESOLVED, one real bug fixed
 
@@ -192,25 +208,23 @@ default — no code changes needed, nothing here was being relied on incorrectly
 - `control-plane/app/workers/provision_cell.py`: create-then-write-config-then-start ordering for
   new cells (Fleet must create the directory before we can overwrite it); config updates on an
   existing cell now `restart()` instead of re-`start()`.
-- `control-plane/app/services/gateway_client.py`: docstring/error messages updated with the real
-  envelope/method shapes and the device-signature blocker; HTTP health-probe assumption downgraded
-  from "corroborated" to "unverified fallback." `trigger_run`/`stream_session_events` deliberately
-  left as `NotImplementedError` — the device-signing algorithm is unverified, and guessing at
-  cryptographic signing code would be worse than an explicit stub.
+- `control-plane/app/services/gateway_client.py`: implemented `trigger_run`/`stream_session_events`
+  as a real token-auth WebSocket client (`role: "operator"`, `auth.token`, no device object) per
+  the resolved finding above; HTTP health-probe assumption downgraded from "corroborated" to
+  "unverified fallback."
 - `agent-runtime/templates/dev-cron-jobs.json5`: corrected the "injected as if a channel message"
   framing and the flag syntax (positional cron-expr/message, `--session`, `--agent`); documented
   the real `openclaw cron add` equivalent command.
 
 ## Still not exercised against a real install
 
-Everything above is now grounded in the real `docs.openclaw.ai` rather than a secondhand summary,
-but none of it has been run against an actual `openclaw` binary or a live Gateway/Fleet cell.
-Before trusting this beyond local dev, in priority order:
+Everything above is now grounded in the real `docs.openclaw.ai` and, for the Gateway protocol, the
+OpenClaw source itself — but none of it has been run against an actual `openclaw` binary or a live
+Gateway/Fleet cell. Before trusting this beyond local dev, in priority order:
 
-1. **Resolve the Gateway device-signing blocker** — find the actual signing algorithm/keypair
-   provisioning flow (OpenClaw source or SDK, not docs search) and decide how it reconciles with
-   this repo's one-`gateway_token`-per-cell model. Nothing calls the real Gateway RPC until this
-   is answered; `trigger_run`/`stream_session_events` stay unimplemented until then.
+1. Connect the new `GatewayClient` WS implementation to a real Gateway and confirm `role:
+   "operator"` + shared token actually gets the scopes needed to call `agent`/`agent.wait` (the
+   source didn't make default operator scopes fully clear — see the "still open" note above).
 2. Run `openclaw fleet create --help` (and the real command) to confirm the `--json` output shape
    for host port/gateway token, and confirm `<state-dir>/fleet/cells/<tenant>/` is really where a
    config write lands.
