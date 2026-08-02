@@ -273,6 +273,11 @@ priority order:
 1. **A real `fleet create`** — no Docker/Podman was available in this pass, so the actual cell
    lifecycle (create → config write → start) and the `--json` output shape for host port/gateway
    token are still unconfirmed beyond `--help` text. This needs a host with a container runtime.
+   Checked twice (2026-08-02): neither this dev machine (no Docker/Podman, and WSL isn't even
+   installed — `wsl --list` fails with `REGDB_E_CLASSNOTREG`) nor a remote cloud sandbox agent had
+   Docker available. Deliberately not faked — the remote agent correctly stopped rather than run
+   `fleet create` without a real container runtime backing it. Needs an environment with Docker or
+   Podman actually running (a CI runner, a cloud box, or Docker Desktop installed locally).
 2. **`stream_session_events`** (`sessions.messages.subscribe`) — implemented and unit-tested
    against the fake server, but not yet run against a real Gateway the way `trigger_run` was.
 3. **A real `openclaw cron add`** invocation, to confirm the agent actually receives and acts on a
