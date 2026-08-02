@@ -43,31 +43,45 @@ example payload). `list`, `logs`, `backup`, `restore`, `doctor`, `upgrade` aren'
 `CellProvisioner` yet — not needed for Phase 3 provisioning, but worth adding once an admin
 cells-ops UI needs them.
 
-## Gateway WebSocket RPC protocol (v4) — PARTIALLY RESOLVED
+## Gateway WebSocket RPC protocol (v4) — PARTIALLY RESOLVED, one hard blocker found
 
-Confirmed against `docs.openclaw.ai/gateway/protocol` and `/gateway/external-apps`. Connection is
-a pre-connect challenge (nonce + timestamp) → client sends `connect` (role, scopes, auth
-token/password, device identity) → gateway replies `hello-ok`. Protocol v4 current, v3 supported
-for one version back.
+Confirmed against `docs.openclaw.ai/gateway/protocol`, `/gateway/external-apps`, and
+`/reference/rpc`. Connection: server sends `{type: "event", event: "connect.challenge", payload:
+{nonce, ts}}`, client replies with a `connect` request, server answers `hello-ok`. Protocol v4
+current, v3 supported for one version back. Request/response envelope:
+`{type: "req", id, method, params}` → `{type: "res", id, ok: true, payload}` or `{..., ok: false,
+error: {code, message, details, retryable, retryAfterMs}}`; out-of-band updates arrive as
+`{type: "event", event, payload}`. Pre-auth frames capped at 64 KiB; post-auth cap comes from
+`hello-ok.policy.maxPayload` (default 25 MB); server sends `tick` keepalives at
+`policy.tickIntervalMs`, and silence beyond 2x that triggers a client-side close (code 4000).
 
-RPC methods now known by name: `agent` (start a run) paired with `agent.wait` (block for terminal
-result) — this is the pairing `/gateway/external-apps` explicitly recommends for external
-integrations. Session-scoped alternative: `sessions.create` → `sessions.send`. Streaming:
-subscribe via `sessions.messages.subscribe`; broadcast event families are `chat`,
-`session.message`, `session.operation`, `session.observer`.
+RPC method shapes now known: `agent` (params: `prompt` required, `agentId`/`model`/`deliver`/
+`bestEffortDeliver`/`idempotencyKey` optional) paired with `agent.wait` (params: `runId`) — the
+pairing `/gateway/external-apps` explicitly recommends for external integrations. Session-scoped
+alternative: `sessions.create` (params: `model`/`thinkingLevel`/`worktree`/`parentSessionKey`/...,
+returns `sessionKey`) → `sessions.send` (params: `key`, `message`, `queueMode`, ...). Streaming:
+`sessions.messages.subscribe` (params: `sessionKey`, `includeApprovals`); broadcast event families
+are `chat`, `session.message`, `session.operation`, `session.observer`.
 
-`gateway_client.py`'s docstring and `NotImplementedError` messages have been updated to name these
-methods, but the client itself still doesn't implement the WS connection/handshake — that's a
-real chunk of work (auth, reconnect, request/response correlation) that needs a real install to
-build against safely, so it's left as an explicit stub rather than a guess.
+**Hard blocker found this pass, not present in the earlier summary**: `connect.params.auth.token`
+alone is not sufficient. "All connections must sign the server-provided connect.challenge nonce" —
+`connect.params.device` (`id`, `publicKey`, `signature`, `signedAt`, `nonce`) is a **required**
+object for every role (operator/node/worker), not just paired end-user devices. Neither
+`/gateway/external-apps` nor `/reference/rpc` documents a simpler non-interactive path for a
+backend service, and the signing algorithm itself wasn't found anywhere in this pass. This means
+`GatewayClient` can't be a bearer-token WS client — it needs a provisioned device keypair, and how
+that reconciles with this repo's one-`gateway_token`-per-cell model (`AgentCell.gateway_token_encrypted`,
+`services/fleet_cli.py`'s `--gateway-token`) is an open design question, not just an
+implementation detail. `gateway_client.py`'s docstring and `NotImplementedError` messages now spell
+this out; do not guess at the signing algorithm — get it from the OpenClaw source or an official
+SDK before writing real signing code here.
 
-**Still open, and notably contradicts the original assumption**: the protocol docs do **not**
-describe HTTP `/healthz`/`/readyz` endpoints — they describe a WS-only `health` RPC method
-instead. `GatewayClient.is_live()`/`is_ready()` still probe HTTP `/healthz`/`/readyz` as a
-best-effort fallback (plausible as a container-level liveness probe separate from the client
-protocol), but that's now flagged as unverified rather than "corroborated" as the original
-docstring claimed. Confirm against a real cell before depending on it for anything but local dev
-convenience.
+**Also still open**: the protocol docs do **not** describe HTTP `/healthz`/`/readyz` endpoints —
+they describe a WS-only `health` RPC method instead. `GatewayClient.is_live()`/`is_ready()` still
+probe HTTP `/healthz`/`/readyz` as a best-effort fallback (plausible as a container-level liveness
+probe separate from the client protocol), but that's flagged as unverified rather than
+"corroborated" as the original docstring claimed. Confirm against a real cell before depending on
+it for anything but local dev convenience.
 
 ## `mcp`/`agents` config schema — RESOLVED, one real bug fixed
 
@@ -106,16 +120,29 @@ any) should be treated as a real behavioral difference, not a naming detail — 
 `agent-runtime/templates/dev-cron-jobs.json5` and `agent-runtime/heartbeat/HEARTBEAT.md` for
 where this assumption fed into skill/heartbeat design.
 
-Documented schedule flags: `--at` (one-shot, ISO 8601 or relative like `20m`), `--every` (fixed
-interval), `--cron` (5/6-field expression, `--tz` for IANA timezone), `--on-exit` (event trigger),
-`--stream-command` (batched-line trigger). Top-of-hour cron expressions auto-stagger by up to 5
-minutes unless `--exact` or an explicit `--stagger` is given. This is all CLI-flag surface
-(`openclaw cron add ...`) — the docs describe the CLI as the interface, not a hand-editable
-`jobs.json` file schema, so the exact on-disk format `dev-cron-jobs.json5` guesses at (`{ id,
-schedule: { type, expression, timezone }, agent, prompt }`) is **still unverified**. That file now
-documents the equivalent `openclaw cron add` command as the more likely-correct approach; if the
-bind-mounted file doesn't work against a real build, switch Phase 1/2 dev to running that command
-inside the container instead.
+Documented schedule/payload shape, refined against `docs.openclaw.ai/cli/cron` on a second pass:
+the cron expression and message are **positional** arguments (`openclaw cron add "<cron-expr>"
+"<message>" ...`), not `--cron`/`--message` flags as first guessed. One-shot jobs use `--at
+<datetime>` (ISO 8601 or relative like `20m`) instead of a cron expression, `--tz <iana>` applies
+to either form. `--session main|isolated|current|session:<id>` selects the session-binding
+target (`isolated` = fresh transcript per run), `--agent <id>` picks the agent, and delivery is
+`--announce` / `--webhook <url>` / `--no-deliver`. `--command <shell>` / `--command-argv '[...]'`
+exist for deterministic shell execution instead of an agent prompt. Top-of-hour cron expressions
+auto-stagger by up to 5 minutes unless `--exact` or an explicit `--stagger` is given. All cron
+mutations (add/update/remove/run) require `operator.admin`. This is all CLI-flag surface — the
+docs describe the CLI as the interface, not a hand-editable `jobs.json` file schema, so the exact
+on-disk format `dev-cron-jobs.json5` guesses at (`{ id, schedule: { type, expression, timezone },
+agent, prompt }`) is **still unverified**. That file now documents the equivalent `openclaw cron
+add` command (using `--session isolated --no-deliver` for the digest use case) as the more
+likely-correct approach; if the bind-mounted file doesn't work against a real build, switch Phase
+1/2 dev to running that command inside the container instead.
+
+There's also a `cron.*` RPC family (`cron.add`, `cron.list`, `cron.get`, `cron.update`,
+`cron.remove`, `cron.run`, `cron.runs`) for managing jobs over the same WebSocket protocol as
+`agent`/`sessions.*` above — an internal experiments-tracker page (not primary API docs) mentions
+`cron.add` RPC params including `sessionTarget`, `wakeMode`, and `payload`, but didn't give enough
+detail to trust those field names; treat that RPC family as existing but its exact shape as
+unverified, separate from the confirmed CLI flag surface above.
 
 ## Config hot-reload — RESOLVED
 
@@ -154,7 +181,7 @@ configured under `plugins.entries.memory-core.config.dreaming` — `enabled: tru
 current config only sets `memory.search.sources: ["memory"]`, which matches the documented
 default — no code changes needed, nothing here was being relied on incorrectly.
 
-## Summary of code changes made in this pass
+## Summary of code changes made across this verification effort
 
 - `agent-runtime/templates/openclaw.json5.jinja`, `dev-openclaw.json5`: `mcpServers` → `mcp.servers`.
 - `control-plane/app/tests/unit/test_config_renderer.py`: assertions updated to match.
@@ -165,17 +192,30 @@ default — no code changes needed, nothing here was being relied on incorrectly
 - `control-plane/app/workers/provision_cell.py`: create-then-write-config-then-start ordering for
   new cells (Fleet must create the directory before we can overwrite it); config updates on an
   existing cell now `restart()` instead of re-`start()`.
-- `control-plane/app/services/gateway_client.py`: docstring/error messages updated with real RPC
-  method names; HTTP health-probe assumption downgraded from "corroborated" to "unverified fallback."
+- `control-plane/app/services/gateway_client.py`: docstring/error messages updated with the real
+  envelope/method shapes and the device-signature blocker; HTTP health-probe assumption downgraded
+  from "corroborated" to "unverified fallback." `trigger_run`/`stream_session_events` deliberately
+  left as `NotImplementedError` — the device-signing algorithm is unverified, and guessing at
+  cryptographic signing code would be worse than an explicit stub.
 - `agent-runtime/templates/dev-cron-jobs.json5`: corrected the "injected as if a channel message"
-  framing; documented the real `openclaw cron add` equivalent command.
+  framing and the flag syntax (positional cron-expr/message, `--session`, `--agent`); documented
+  the real `openclaw cron add` equivalent command.
 
 ## Still not exercised against a real install
 
 Everything above is now grounded in the real `docs.openclaw.ai` rather than a secondhand summary,
 but none of it has been run against an actual `openclaw` binary or a live Gateway/Fleet cell.
-Before trusting this beyond local dev: run `openclaw fleet create --help` (and the real command)
-to confirm the `--json` output shape for host port/gateway token; stand up a real cell and hit its
-`/healthz` to see if it actually exists; and test one `openclaw cron add --session ... --message
-...` invocation end-to-end to confirm the agent actually receives and acts on it as a "scheduler
-turn."
+Before trusting this beyond local dev, in priority order:
+
+1. **Resolve the Gateway device-signing blocker** — find the actual signing algorithm/keypair
+   provisioning flow (OpenClaw source or SDK, not docs search) and decide how it reconciles with
+   this repo's one-`gateway_token`-per-cell model. Nothing calls the real Gateway RPC until this
+   is answered; `trigger_run`/`stream_session_events` stay unimplemented until then.
+2. Run `openclaw fleet create --help` (and the real command) to confirm the `--json` output shape
+   for host port/gateway token, and confirm `<state-dir>/fleet/cells/<tenant>/` is really where a
+   config write lands.
+3. Stand up a real cell and hit its `/healthz` to see if it actually exists, or if `health` is
+   WS-RPC-only as the protocol docs suggest.
+4. Test one `openclaw cron add "<cron>" "<message>" --session isolated --agent ... --no-deliver`
+   invocation end-to-end to confirm the agent actually receives and acts on it as a "scheduler
+   turn," and to reveal the on-disk `jobs.json` schema if there is one.

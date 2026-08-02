@@ -2,20 +2,25 @@
 // container, bind-mounted read-only as ~/.openclaw/cron/jobs.json (see
 // infra/docker-compose.dev.yml).
 //
-// CORRECTED per docs.openclaw.ai/automation/cron-jobs (see
+// CORRECTED per docs.openclaw.ai/cli/cron and /automation/cron-jobs (see
 // docs/openclaw-integration-notes.md): this repo originally assumed a job's
 // `prompt` is injected "as if a channel message arrived." That's wrong — the
-// documented model is an unattended scheduler-run agent turn, started with a
-// `--session` + `--message` payload, explicitly NOT a simulated channel
-// message. The docs describe `openclaw cron add` (with `--cron`/`--tz`/
-// `--at`/`--every` schedule flags) as the supported interface; they do not
-// publish the on-disk jobs.json schema this file guesses at, so the field
-// names below (`schedule.type/expression/timezone`, `agent`, `prompt`) are
-// still UNVERIFIED against a real install. The CLI-equivalent command is:
+// documented model is an unattended scheduler-run agent turn, explicitly NOT
+// a simulated channel message. The docs describe `openclaw cron add` as the
+// supported interface, with the cron expression and message as *positional*
+// args (not `--cron`/`--message` flags as originally guessed), a `--session
+// main|isolated|current|session:<id>` target, and `--agent <id>` to pick the
+// agent. They do not publish the on-disk jobs.json schema this file guesses
+// at, so the field names below (`schedule.type/expression/timezone`,
+// `agent`, `prompt`) remain UNVERIFIED against a real install. The
+// CLI-equivalent command, using `--session isolated` for a fresh transcript
+// per run and `--no-deliver` since delivery happens via the digest skill's
+// own MCP tool call rather than a channel reply:
 //
-//   openclaw cron add --cron "0 8 * * *" --tz America/New_York \
-//     --session dev-org-primary \
-//     --message "Run the digest skill now for the daily period."
+//   openclaw cron add "0 8 * * *" \
+//     "Run the digest skill now for the daily period." \
+//     --tz America/New_York --agent dev-org-primary \
+//     --session isolated --no-deliver
 //
 // If bind-mounting this file doesn't work against a real openclaw build,
 // switch Phase 1/2 dev to running that `openclaw cron add` command once
