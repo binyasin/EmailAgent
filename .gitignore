@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OpenClaw runtime state (never commit tenant state)
+**/.openclaw/
+**/openclaw-agent.sqlite
+
+# Phase 3: rendered per-tenant config staged for Fleet (see
+# app/workers/provision_cell.py) — generated, tenant-specific, never commit
+.cell-state/
+
+# DB
+*.sqlite3
+postgres-data/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

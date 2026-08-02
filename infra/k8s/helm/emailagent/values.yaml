@@ -1,0 +1,99 @@
+# Default values for the emailagent chart. Override per-environment with
+# `helm install -f values.prod.yaml` — do NOT edit real secret values here,
+# they belong in an external Secret (see `existingSecret` below) or a
+# secrets-manager-backed one (see docs/architecture.md's secrets manager
+# section and app/services/secrets.py).
+
+controlPlane:
+  image:
+    repository: ghcr.io/example-org/emailagent-control-plane
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  port: 8000
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  # Liveness/readiness — control-plane's own endpoints, unrelated to an
+  # OpenClaw cell's /healthz mentioned elsewhere in these docs. /healthz is a
+  # cheap "process is up" check; /readyz additionally pings the database.
+  probes:
+    livenessPath: /healthz
+    readinessPath: /readyz
+
+dashboard:
+  image:
+    repository: ghcr.io/example-org/emailagent-dashboard
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  port: 8080 # nginx-unprivileged default — see dashboard/Dockerfile
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 128Mi }
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: app.example.com
+  tls:
+    enabled: true
+    secretName: emailagent-tls
+  # Second, separate Ingress for cell hosts to reach the token-broker/ingest
+  # endpoints. MUST be bound to a private/VPC-internal load balancer, never
+  # the public internet — e.g. on a cloud provider's nginx-ingress, annotate
+  # with that provider's "internal load balancer" annotation
+  # (`service.beta.kubernetes.io/aws-load-balancer-scheme: internal` on AWS,
+  # `networking.gke.io/load-balancer-type: Internal` on GKE, etc.) and/or a
+  # source-IP allowlist restricted to the cell hosts' subnet. Left disabled
+  # by default so a misconfigured deployment fails closed rather than
+  # silently exposing it publicly with the wrong annotation.
+  internal:
+    enabled: false
+    className: nginx-internal
+    annotations: {}
+    host: internal.emailagent.svc.cluster.local
+
+# Name of an externally-managed Kubernetes Secret containing the control
+# plane's runtime secrets (DATABASE_URL, JWT_SECRET_KEY, TOKEN_ENCRYPTION_KEY,
+# GOOGLE_OAUTH_CLIENT_SECRET, MS_OAUTH_CLIENT_SECRET, STRIPE_SECRET_KEY,
+# STRIPE_WEBHOOK_SECRET). Create it via your secrets manager's k8s
+# integration (e.g. External Secrets Operator syncing from Vault/AWS Secrets
+# Manager) rather than `kubectl create secret` by hand in any environment
+# beyond local testing.
+#
+# NOTE: there is no cell-service credential in this Secret — each tenant
+# cell gets its own JWT minted at provisioning time from JWT_SECRET_KEY
+# (see app/core/security.py's create_cell_service_token), not a shared
+# static value. An earlier design used one global shared secret for every
+# cell here, which was a cross-tenant vulnerability; don't reintroduce it.
+existingSecret: emailagent-secrets
+
+# Non-secret runtime config.
+env:
+  CORS_ALLOW_ORIGINS: '["https://app.example.com"]'
+  DEFAULT_CELL_IMAGE: "openclaw/openclaw:latest"
+  # control-plane-deployment.yaml sets readOnlyRootFilesystem: true, so the
+  # config-staging directory from app/workers/provision_cell.py must point
+  # at the writable emptyDir mounted at /tmp, not the app's own default of
+  # ./.cell-state (relative to a read-only working directory in this image).
+  CELL_STATE_ROOT: /tmp/cell-state
+
+postgresql:
+  # This chart does not vendor a Postgres subchart — production deployments
+  # should use a managed database (RDS/Cloud SQL/etc.) and put its URL in
+  # `existingSecret`. Set this comment aside only if you deliberately choose
+  # to add the bitnami/postgresql subchart as a dependency for a self-hosted
+  # non-production environment.
+  externallyManaged: true
+
+serviceAccount:
+  create: true
+  annotations: {}

@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "emailagent.fullname" . }}-control-plane
+  labels:
+    {{- include "emailagent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  {{- if not .Values.controlPlane.autoscaling.enabled }}
+  replicas: {{ .Values.controlPlane.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "emailagent.controlPlane.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "emailagent.controlPlane.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "emailagent.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: control-plane
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlane.port }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+            - configMapRef:
+                name: {{ include "emailagent.fullname" . }}-config
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.controlPlane.probes.livenessPath }}
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.controlPlane.probes.readinessPath }}
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

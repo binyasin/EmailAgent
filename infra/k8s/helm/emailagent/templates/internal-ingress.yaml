@@ -1,0 +1,40 @@
+{{- if .Values.ingress.internal.enabled }}
+# See values.yaml's `ingress.internal` comment: this MUST be bound to a
+# private/VPC-internal load balancer via provider-specific annotations, or
+# cell hosts (and only cell hosts) won't be able to reach the token broker
+# and ingest endpoints without also exposing them to the public internet.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "emailagent.fullname" . }}-internal
+  labels:
+    {{- include "emailagent.labels" . | nindent 4 }}
+  {{- with .Values.ingress.internal.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.internal.className }}
+  rules:
+    - host: {{ .Values.ingress.internal.host }}
+      http:
+        paths:
+          - path: /internal/v1/tokens
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "emailagent.fullname" . }}-control-plane
+                port: { number: 80 }
+          - path: /internal/v1/drafts
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "emailagent.fullname" . }}-control-plane
+                port: { number: 80 }
+          - path: /internal/v1/digests
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "emailagent.fullname" . }}-control-plane
+                port: { number: 80 }
+{{- end }}

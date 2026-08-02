@@ -1,0 +1,12 @@
+apiVersion: v2
+name: emailagent
+description: >-
+  AI Email Agent SaaS control plane + dashboard. Deploys control-plane (FastAPI)
+  and dashboard (static React build behind nginx) only — per docs/architecture.md's
+  "hybrid topology", tenant OpenClaw Fleet cells are NOT deployed by this chart
+  and are expected to run on dedicated Docker/Podman cell hosts outside the
+  cluster, since Fleet has no documented Kubernetes operator. See
+  ../notes.md for why.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

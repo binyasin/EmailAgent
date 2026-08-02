@@ -1,0 +1,20 @@
+emailagent control-plane + dashboard deployed.
+
+Dashboard: https://{{ .Values.ingress.host }}
+API:       https://{{ .Values.ingress.host }}/api
+
+Before this deployment is actually usable:
+  1. Ensure the Secret named `{{ .Values.existingSecret }}` exists in this namespace
+     with DATABASE_URL, JWT_SECRET_KEY, TOKEN_ENCRYPTION_KEY, GOOGLE_OAUTH_CLIENT_SECRET,
+     MS_OAUTH_CLIENT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET — see values.yaml's
+     `existingSecret` comment (no shared cell-service secret needed — each cell gets its
+     own token minted at provisioning time).
+  2. Run `alembic upgrade head` against DATABASE_URL (not automated by this
+     chart — run as a one-off Job or from CI before/after install).
+  3. If `ingress.internal.enabled` is false (the default), tenant OpenClaw
+     cells cannot reach the token broker or ingest endpoints yet — see
+     ../notes.md and values.yaml's `ingress.internal` comment before
+     provisioning any tenant cells.
+
+This chart does NOT deploy OpenClaw Fleet cells, Postgres, or Redis/a task
+queue — see ../notes.md for the intended hybrid topology.

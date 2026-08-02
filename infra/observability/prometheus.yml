@@ -1,0 +1,11 @@
+# Local-dev Prometheus config, scraping the control-plane's /metrics
+# endpoint exposed via prometheus-fastapi-instrumentator (app/main.py).
+# In k8s, replace this with a ServiceMonitor (if using the Prometheus
+# Operator) targeting the control-plane Service instead of a static file.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: emailagent-control-plane
+    static_configs:
+      - targets: ["control-plane:8000"]

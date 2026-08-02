@@ -1,0 +1,52 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "emailagent.fullname" . }}
+  labels:
+    {{- include "emailagent.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # Only the dashboard-facing REST API and the billing webhook (which
+          # must be internet-reachable so Stripe can call it) are exposed
+          # publicly. The token-broker (/internal/v1/tokens) and ingest
+          # endpoints (/internal/v1/drafts, /internal/v1/digests) are for
+          # cell hosts only and are deliberately NOT routed here — see
+          # internal-ingress.yaml, which is restricted to the cluster's
+          # private network. Publicly exposing them would hand every
+          # internet client a shot at guessing the shared cell-service
+          # secret; keeping them off the public ingress removes that
+          # exposure even though the secret check is also enforced.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "emailagent.fullname" . }}-control-plane
+                port: { number: 80 }
+          - path: /internal/v1/billing/webhook
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "emailagent.fullname" . }}-control-plane
+                port: { number: 80 }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "emailagent.fullname" . }}-dashboard
+                port: { number: 80 }
+{{- end }}

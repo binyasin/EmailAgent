@@ -1,0 +1,23 @@
+// Hand-authored Phase 2 dev cron config for the single-tenant OpenClaw
+// container. Intended to be mounted as ~/.openclaw/cron/jobs.json.
+//
+// NOTE: the exact jobs.json schema (field names for the cron expression,
+// timezone, and — critically — how a job's trigger reaches the agent, e.g.
+// a "prompt" field injected as if a channel message arrived) is based on a
+// secondhand description gathered during planning, not primary-source
+// reading of docs.openclaw.ai/automation/cron-jobs. Verify against
+// `openclaw cron --help` / the docs before relying on this in a real
+// deployment — see docs/openclaw-integration-notes.md.
+{
+  jobs: [
+    {
+      id: "dev-org-daily-digest",
+      schedule: { type: "cron", expression: "0 8 * * *", timezone: "America/New_York" },
+      agent: "dev-org-primary",
+      // Injected as the triggering instruction for this run, analogous to a
+      // user message — the agent should recognize this as "run the digest
+      // skill now" and follow its SKILL.md steps.
+      prompt: "Run the digest skill now for the daily period.",
+    },
+  ],
+}
