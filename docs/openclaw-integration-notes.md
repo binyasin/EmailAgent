@@ -169,6 +169,79 @@ agent's own `skills` list in addition to `agents.defaults.skills: ["_shared"]`; 
 merge, this is redundant (relying on the Gateway to dedupe) rather than wrong — worth simplifying
 later but not a bug.
 
+## Model provider auth (`models` config key) — confirmed via docs, not yet live-verified
+
+This is the missing piece behind the `FailoverError: No API key found for provider "openai"` seen
+in the live Gateway RPC test above — the throwaway dev profile used for that test had no `models`
+config at all. Confirmed against `docs.openclaw.ai/gateway/configuration-reference`:
+`models.providers.<name>.apiKey` accepts either a plaintext string or a `${VAR}` env-interpolation
+reference (same substitution syntax already used for `CELL_SERVICE_TOKEN` in `mcp.servers.*.env`
+— only uppercase `[A-Z_][A-Z0-9_]*` names are recognized, and a missing/empty variable throws at
+config load) or a `SecretRef` object (`{ source: "env", provider: "default", id: "..." }`).
+
+Wired in as `models.providers.anthropic.apiKey: "${ANTHROPIC_API_KEY}"` in both
+`agent-runtime/templates/openclaw.json5.jinja` and `agent-runtime/templates/dev-openclaw.json5`.
+The variable itself is sourced from `Settings.anthropic_api_key` (`control-plane/app/core/config.py`,
+env var `ANTHROPIC_API_KEY`, set in `.env`) and injected two different ways depending on which
+OpenClaw deployment path is in play:
+
+- **Phase 1/2 single-tenant dev container** (`infra/docker-compose.dev.yml`'s `openclaw` service):
+  already loads the whole `../.env` file via `env_file`, so no extra wiring was needed there beyond
+  adding the key to `.env`.
+- **Phase 3 per-tenant Fleet cells** (`app/workers/provision_cell.py`): env vars are passed
+  explicitly and allow-listed via `--env KEY=VALUE` on `fleet create` (not inherited from the
+  control-plane process), same as `CELL_SERVICE_TOKEN`/`TENANT_ID` already were — so
+  `ANTHROPIC_API_KEY` was added to that `env={...}` dict alongside them.
+
+**Still open**: not yet live-verified against a real Gateway the way the Fleet CLI surface and the
+`agent`/`agent.wait` RPC round trip were — no real `ANTHROPIC_API_KEY` was exercised against a live
+`openclaw` process in this pass, so whether the Gateway actually resolves `${ANTHROPIC_API_KEY}` at
+config-load time exactly as documented (versus e.g. requiring `models.providers.anthropic.models`
+to also list at least one allowed model id) remains to be confirmed the same way the RPC blocker
+above was — by running a real Gateway and a real `agent`/`agent.wait` call and checking the
+`FailoverError` is gone.
+
+**Gemini (`models.providers.google`) — weaker source than the Anthropic entry above.** The main
+`/gateway/configuration-reference` page does not itself document a Google/Gemini provider entry
+(only Anthropic and OpenAI examples appear there); the provider key `google` and the
+`api: "google-generative-ai"` adapter field (as opposed to `google-vertex`, a separate adapter for
+Vertex AI's different auth mechanism) came from a docs-search summary of
+`/gateway/config-tools#custom-providers-and-base-urls`, not a page fetch confirmed side-by-side
+with a real install the way the Fleet CLI and RPC findings above were. Wired in as
+`models.providers.google: { apiKey: "${GEMINI_API_KEY}", api: "google-generative-ai" }` in the same
+two template files, `Settings.gemini_api_key` (env var `GEMINI_API_KEY`), and the same
+`fleet create --env` list in `provision_cell.py`. If a real install rejects the `api` field or uses
+a different provider key, this is the first place to check — ideally via `openclaw config schema`
+against a real install, which the config-tools page itself suggests as the authoritative source.
+
+**OpenRouter (`models.providers.openrouter`) — same weaker source, one level further out.**
+OpenRouter isn't a named provider in either OpenClaw doc page fetched so far; it has to go in as a
+**custom provider** (the `/gateway/config-tools#custom-providers-and-base-urls` mechanism used for
+things like Cerebras/Kimi/MiniMax/Moonshot in that page's own examples), which per a docs-search
+summary of that page requires a provider-ID key, `baseUrl`, `apiKey`, and an `api` adapter field —
+picked `api: "openai-completions"` since OpenRouter exposes an OpenAI-compatible chat completions
+endpoint, one of the adapter values a follow-up docs-search summary listed as valid (alongside
+`openai-responses`, `anthropic-messages`, `google-generative-ai`, `google-vertex`,
+`github-copilot`, `bedrock-converse-stream`, `ollama`, `azure-openai-responses`). Wired in as
+`models.providers.openrouter: { baseUrl: "https://openrouter.ai/api/v1", apiKey:
+"${OPENROUTER_API_KEY}", api: "openai-completions" }` in both template files,
+`Settings.openrouter_api_key` (env var `OPENROUTER_API_KEY`), and the same `fleet create --env`
+list.
+
+**`models` allowlist — added 2026-08-04, ids verified live against OpenRouter's own catalog.** The
+user initially asked for `deepseek/deepseek-chat` and `anthropic/claude-sonnet-4.5`; a direct fetch
+of `https://openrouter.ai/api/v1/models` (OpenRouter's own API, not an OpenClaw doc) found **neither
+id exists** — confirmed by a substring search of the raw response, not just a summary skim. Real
+current ids, with `context_length`/`top_provider.max_completion_tokens` read verbatim from that
+same response: `anthropic/claude-sonnet-5` (name "Anthropic: Claude Sonnet 5", context 1,000,000,
+max completion 128,000) and `deepseek/deepseek-v4-flash-0731` (name "DeepSeek: DeepSeek V4 Flash
+0731", context 1,048,576, max completion 65,536). User confirmed both substitutions before they
+were written into config. Mapped into the provider's `models: [...]` array as `id`/`name`/
+`contextWindow`/`maxTokens` per the config-tools custom-provider example shape. **Still open**:
+whether OpenClaw's own schema wants exactly these field names (`contextWindow`/`maxTokens`) or
+something else, since this array's shape itself is still only sourced from a docs-search summary,
+not a page fetch — same caveat as the rest of this OpenRouter section.
+
 ## Cron job schema — RESOLVED, and the original digest-wiring assumption was wrong
 
 Confirmed against `docs.openclaw.ai/automation/cron-jobs`. This was flagged as "the single
@@ -263,6 +336,15 @@ default — no code changes needed, nothing here was being relied on incorrectly
 - `agent-runtime/templates/dev-cron-jobs.json5`: corrected the "injected as if a channel message"
   framing and the flag syntax (positional cron-expr/message, `--session`, `--agent`); documented
   the real `openclaw cron add` equivalent command.
+- `agent-runtime/templates/openclaw.json5.jinja`, `dev-openclaw.json5`: added
+  `models.providers.anthropic.apiKey: "${ANTHROPIC_API_KEY}"`,
+  `models.providers.google: { apiKey: "${GEMINI_API_KEY}", api: "google-generative-ai" }`, and
+  `models.providers.openrouter: { baseUrl: "https://openrouter.ai/api/v1", apiKey:
+  "${OPENROUTER_API_KEY}", api: "openai-completions" }` so cells actually have LLM provider auth
+  (see "Model provider auth" above). `control-plane/app/core/config.py`: added
+  `anthropic_api_key`/`gemini_api_key`/`openrouter_api_key` settings.
+  `control-plane/app/workers/provision_cell.py`: added `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`/
+  `OPENROUTER_API_KEY` to the Fleet cell's `--env` on create.
 
 ## Still not exercised against a real install
 

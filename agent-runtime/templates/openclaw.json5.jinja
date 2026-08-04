@@ -4,7 +4,48 @@
 // hand-authored Phase 1/2 equivalent this was derived from, and
 // docs/openclaw-integration-notes.md for field provenance against the real
 // docs.openclaw.ai schema.
+//
+// models.providers.<name>.apiKey uses the same ${VAR} env-interpolation
+// syntax as mcp.servers.*.env below — confirmed against
+// docs.openclaw.ai/gateway/configuration-reference. ANTHROPIC_API_KEY /
+// GEMINI_API_KEY / OPENROUTER_API_KEY are injected into the cell's
+// container env by app/workers/provision_cell.py, same mechanism as
+// CELL_SERVICE_TOKEN.
 {
+  models: {
+    providers: {
+      anthropic: {
+        apiKey: "${ANTHROPIC_API_KEY}",
+      },
+      google: {
+        apiKey: "${GEMINI_API_KEY}",
+        api: "google-generative-ai",
+      },
+      openrouter: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        apiKey: "${OPENROUTER_API_KEY}",
+        api: "openai-completions",
+        // ids/contextWindow/maxTokens pulled live from
+        // https://openrouter.ai/api/v1/models on 2026-08-04 — see
+        // docs/openclaw-integration-notes.md.
+        models: [
+          {
+            id: "anthropic/claude-sonnet-5",
+            name: "Anthropic: Claude Sonnet 5",
+            contextWindow: 1000000,
+            maxTokens: 128000,
+          },
+          {
+            id: "deepseek/deepseek-v4-flash-0731",
+            name: "DeepSeek: DeepSeek V4 Flash 0731",
+            contextWindow: 1048576,
+            maxTokens: 65536,
+          },
+        ],
+      },
+    },
+  },
+
   mcp: {
     servers: {
 {%- if "gmail" in providers %}

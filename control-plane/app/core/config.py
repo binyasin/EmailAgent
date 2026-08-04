@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     openclaw_state_dir: str = "~/.openclaw"
     default_cell_image: str = "openclaw/openclaw:latest"
 
+    # LLM provider auth for tenant cells — injected into each Fleet cell's
+    # container env by app/workers/provision_cell.py and referenced from
+    # openclaw.json as models.providers.anthropic.apiKey: "${ANTHROPIC_API_KEY}"
+    # (see agent-runtime/templates/openclaw.json5.jinja).
+    anthropic_api_key: str = ""
+    # Same mechanism, for the "google" provider (Gemini) — models.providers.google.apiKey:
+    # "${GEMINI_API_KEY}".
+    gemini_api_key: str = ""
+    # Same mechanism, for the "openrouter" custom provider — models.providers.openrouter.apiKey:
+    # "${OPENROUTER_API_KEY}".
+    openrouter_api_key: str = ""
+
     # billing — see app/services/billing.py
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

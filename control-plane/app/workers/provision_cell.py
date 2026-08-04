@@ -84,7 +84,17 @@ def provision_cell(
             create_result = cell_provisioner.create(
                 tenant_key,
                 image=image_ref,
-                env={"TENANT_ID": org_id, "CELL_SERVICE_TOKEN": cell_service_token},
+                env={
+                    "TENANT_ID": org_id,
+                    "CELL_SERVICE_TOKEN": cell_service_token,
+                    # Resolves models.providers.anthropic.apiKey's ${ANTHROPIC_API_KEY}
+                    # in the rendered openclaw.json — see config_renderer.py.
+                    "ANTHROPIC_API_KEY": get_settings().anthropic_api_key,
+                    # Resolves models.providers.google.apiKey's ${GEMINI_API_KEY}.
+                    "GEMINI_API_KEY": get_settings().gemini_api_key,
+                    # Resolves models.providers.openrouter.apiKey's ${OPENROUTER_API_KEY}.
+                    "OPENROUTER_API_KEY": get_settings().openrouter_api_key,
+                },
                 no_start=True,
             )
             _stage_config_files(create_result.tenant_key, config_files)
