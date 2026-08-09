@@ -8,9 +8,9 @@
 // models.providers.<name>.apiKey uses the same ${VAR} env-interpolation
 // syntax as mcp.servers.*.env below — confirmed against
 // docs.openclaw.ai/gateway/configuration-reference. ANTHROPIC_API_KEY /
-// GEMINI_API_KEY / OPENROUTER_API_KEY are injected into the cell's
-// container env by app/workers/provision_cell.py, same mechanism as
-// CELL_SERVICE_TOKEN.
+// GEMINI_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY are injected into
+// the cell's container env by app/workers/provision_cell.py, same
+// mechanism as CELL_SERVICE_TOKEN.
 {
   models: {
     providers: {
@@ -20,6 +20,9 @@
       google: {
         apiKey: "${GEMINI_API_KEY}",
         api: "google-generative-ai",
+      },
+      openai: {
+        apiKey: "${OPENAI_API_KEY}",
       },
       openrouter: {
         baseUrl: "https://openrouter.ai/api/v1",

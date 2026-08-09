@@ -94,6 +94,8 @@ def provision_cell(
                     "GEMINI_API_KEY": get_settings().gemini_api_key,
                     # Resolves models.providers.openrouter.apiKey's ${OPENROUTER_API_KEY}.
                     "OPENROUTER_API_KEY": get_settings().openrouter_api_key,
+                    # Resolves models.providers.openai.apiKey's ${OPENAI_API_KEY}.
+                    "OPENAI_API_KEY": get_settings().openai_api_key,
                 },
                 no_start=True,
             )

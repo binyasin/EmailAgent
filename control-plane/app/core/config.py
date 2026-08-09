@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # Same mechanism, for the "openrouter" custom provider — models.providers.openrouter.apiKey:
     # "${OPENROUTER_API_KEY}".
     openrouter_api_key: str = ""
+    # Same mechanism, for the "openai" provider — models.providers.openai.apiKey:
+    # "${OPENAI_API_KEY}".
+    openai_api_key: str = ""
 
     # billing — see app/services/billing.py
     stripe_secret_key: str = ""
